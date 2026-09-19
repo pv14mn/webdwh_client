@@ -1,0 +1,106 @@
+create or replace procedure mql.load_fact (p_cid_run integer, p_js_array jsonb[]) language sql
+begin atomic
+with
+  src as (
+    select
+      to_timestamp((t.js ->> 'evts')::numeric / 1000) as evts,
+      (t.js ->> 'icode')::integer as icode,
+      (t.js ->> 'scode')::varchar(6) as scode,
+      (t.js ->> 'ask')::numeric as ask,
+      (t.js ->> 'bid')::numeric as bid,
+      (t.js ->> 'tickCnt')::numeric as tick_cnt,
+      to_timestamp((t.js ->> 'extts')::numeric / 1000) as extts,
+      now() as insts,
+      (t.js ->> 'sidRun')::numeric as sid_run,
+      load_fact.p_cid_run as cid_run
+    from
+      unnest(load_fact.p_js_array) as t (js)
+  ),
+  tickers as (
+    insert into
+      mql.tickers (icode, scode, c1, c2, description)
+    select distinct
+      src.icode,
+      src.scode,
+      'xx' as c1,
+      'xx' as c2,
+      '<change me>' as description
+    from
+      src
+    ON CONFLICT DO NOTHING
+  ),
+  quotes as (
+    insert into
+      mql.quotes as q (
+        evts,
+        icode,
+        ask,
+        bid,
+        tick_cnt,
+        extts,
+        insts,
+        sid_run,
+        cid_run
+      )
+    select
+      src.evts,
+      src.icode,
+      src.ask,
+      src.bid,
+      src.tick_cnt,
+      src.extts,
+      src.insts,
+      src.sid_run,
+      src.cid_run
+    from
+      src
+    returning
+      q.*
+  ),
+  quotes_last as (
+    insert into
+      mql.quotes_last (
+        evts,
+        icode,
+        ask,
+        bid,
+        tick_cnt,
+        extts,
+        insts,
+        sid_run,
+        cid_run
+      )
+    select
+      q.evts,
+      q.icode,
+      q.ask,
+      q.bid,
+      q.tick_cnt,
+      q.extts,
+      q.insts,
+      q.sid_run,
+      q.cid_run
+    from
+      quotes q
+    on conflict (icode) do update
+    set
+      evts = excluded.evts,
+      ask = excluded.ask,
+      bid = excluded.bid,
+      tick_cnt = excluded.tick_cnt,
+      extts = excluded.extts,
+      insts = excluded.insts,
+      sid_run = excluded.sid_run,
+      cid_run = excluded.cid_run
+  )
+insert into
+  webdwh_aux.system_heartbeat as t (subsystem, last_activity)
+values
+  ('mql', now())
+on conflict (subsystem) do update
+set
+  last_activity = excluded.last_activity
+where
+  t.last_activity <= excluded.last_activity - '00:00:05'::interval;
+
+end;

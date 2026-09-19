@@ -1,0 +1,21 @@
+create or replace procedure mql.load_dict (p_js_array jsonb[]) language sql
+begin atomic
+insert into
+  mql.tickers (icode, scode, c1, c2, description)
+select
+  (t.js ->> 'id')::integer as icode,
+  (t.js ->> 'name')::varchar(6) as scode,
+  (t.js ->> 'c1')::varchar(2) as c1,
+  (t.js ->> 'c2')::varchar(2) as c2,
+  (t.js ->> 'description')::varchar(64) as description
+from
+  unnest(p_js_array) t (js)
+ON CONFLICT (icode) DO UPDATE
+set
+  /*icode = excluded.icode,*/
+  scode = excluded.scode,
+  c1 = excluded.c1,
+  c2 = excluded.c2,
+  description = excluded.description;
+
+end;

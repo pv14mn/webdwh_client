@@ -1,0 +1,77 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg18
+    container_name: timescaledb
+    env_file:
+      - ./timescaledb/.env.db.auth.txt
+    ports:
+      - "5400:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -U postgres"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      start_interval: 2s
+    restart: unless-stopped
+  db-init:
+    # usage: docker compose run --rm db-init
+    profiles: ["init"]
+    image: timescale/timescaledb:latest-pg18
+    env_file:
+      - ./timescaledb/.env.db.auth.txt
+    volumes:
+      - ./sql_scripts:/sql_scripts
+    entrypoint: >
+      sh -c "
+      for f in /sql_scripts/init/*.sql; do
+        echo run $$f;
+        PGPASSWORD=$$POSTGRES_PASSWORD psql -q -h timescaledb -U postgres -d postgres -v WEBDWH_PASSWORD=\"$$WEBDWH_PASSWORD\" -v VIEWER_PASSWORD=\"$$VIEWER_PASSWORD\" -f \"$$f\";
+      done
+      "
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+  node_pf:
+    #profiles: ["pf"]
+    build:
+      context: ./node
+      dockerfile: Dockerfile
+    image: pv14mn/webdwh_client:node
+    container_name: node_pf
+    command: >
+      node ./dist/pf/main.js
+    volumes:
+      - ./node/app/dist:/app/dist
+    env_file:
+      - ./node/.env.nats.auth.txt
+      - ./node/.env.load.params.txt
+      - ./timescaledb/.env.db.auth.txt
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    restart: unless-stopped
+  node_mql:
+    #profiles: ["mql"]
+    build:
+      context: ./node
+      dockerfile: Dockerfile
+    image: pv14mn/webdwh_client:node
+    container_name: node_mql
+    command: >
+      node ./dist/mql/main.js
+    volumes:
+      - ./node/app/dist:/app/dist
+    env_file:
+      - ./node/.env.nats.auth.txt
+      - ./node/.env.load.params.txt
+      - ./timescaledb/.env.db.auth.txt
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    restart: unless-stopped
+volumes:
+  postgres_data:
+    external: false

@@ -1,0 +1,3 @@
+node/.env.nats.auth.txt
+node/.env.load.params.txt
+timescaledb/.env.db.auth.txt

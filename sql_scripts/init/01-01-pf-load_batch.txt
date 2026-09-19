@@ -1,0 +1,370 @@
+create or replace procedure pf.load_batch (
+  in p_cid_run integer,
+  in p_evts numeric[],
+  in p_scode varchar[],
+  in p_tick varchar[],
+  in p_icode smallint[],
+  in p_a numeric[],
+  in p_b numeric[],
+  in p_nch numeric[],
+  in p_lp numeric[],
+  in p_nchl numeric[],
+  in p_tick_cnt integer[],
+  in p_extts numeric[],
+  in p_sid_run integer[]
+) language sql
+begin atomic
+with
+  src AS (
+    select
+      to_timestamp(t.evts / 1000) as evts,
+      t.scode,
+      t.tick,
+      t.icode,
+      t.a,
+      t.b,
+      t.nch,
+      t.lp,
+      t.nchl,
+      t.tick_cnt,
+      to_timestamp(t.extts / 1000) as extts,
+      now() as insts,
+      t.sid_run,
+      case
+        when t.lp is not null then case
+          when t.scode like '%!_FUT' escape '!' then 'futures'
+          else 'indices'
+        end
+        else case
+          when t.scode like '% 10y' then 'bonds'
+          else 'quotes'
+        end
+      end as discriminator
+    from
+      unnest(
+        p_evts,
+        p_scode,
+        p_tick,
+        p_icode,
+        p_a,
+        p_b,
+        p_nch,
+        p_lp,
+        p_nchl,
+        p_tick_cnt,
+        p_extts,
+        p_sid_run
+      ) t (
+        evts,
+        scode,
+        tick,
+        icode,
+        a,
+        b,
+        nch,
+        lp,
+        nchl,
+        tick_cnt,
+        extts,
+        sid_run
+      )
+  ),
+  dict AS (
+    insert into
+      pf.tickers (icode, tick, scode, pf_category_ru, pf_category_en)
+    select distinct
+      src.icode,
+      src.tick,
+      src.scode,
+      '<change me>' as pf_category_ru,
+      '<change me>' as pf_category_en
+    from
+      src
+    ON CONFLICT DO NOTHING
+  ),
+  futures AS (
+    insert into
+      pf.futures (
+        evts,
+        icode,
+        lstpr,
+        nch,
+        tick_cnt,
+        extts,
+        insts,
+        sid_run,
+        cid_run
+      )
+    select
+      src.evts,
+      src.icode,
+      src.lp as lstpr,
+      src.nchl as nch,
+      src.tick_cnt,
+      src.extts,
+      src.insts,
+      src.sid_run,
+      load_batch.p_cid_run as cid_run
+    from
+      src
+    where
+      src.discriminator = 'futures'
+    returning
+      *
+  ),
+  futures_last AS (
+    insert into
+      pf.futures_last (
+        evts,
+        icode,
+        lstpr,
+        nch,
+        tick_cnt,
+        extts,
+        insts,
+        sid_run,
+        cid_run
+      )
+    select
+      f.evts,
+      f.icode,
+      f.lstpr,
+      f.nch,
+      f.tick_cnt,
+      f.extts,
+      f.insts,
+      f.sid_run,
+      f.cid_run
+    from
+      futures f
+    on conflict (icode) do update
+    set
+      evts = excluded.evts,
+      lstpr = excluded.lstpr,
+      nch = excluded.nch,
+      tick_cnt = excluded.tick_cnt,
+      extts = excluded.extts,
+      insts = excluded.insts,
+      sid_run = excluded.sid_run,
+      cid_run = excluded.cid_run
+  ),
+  indices AS (
+    insert into
+      pf.indices (
+        evts,
+        icode,
+        lstpr,
+        nch,
+        tick_cnt,
+        extts,
+        insts,
+        sid_run,
+        cid_run
+      )
+    select
+      src.evts,
+      src.icode,
+      src.lp as lstpr,
+      src.nchl as nch,
+      src.tick_cnt,
+      src.extts,
+      src.insts,
+      src.sid_run,
+      load_batch.p_cid_run as cid_run
+    from
+      src
+    where
+      src.discriminator = 'indices'
+    returning
+      *
+  ),
+  indices_last AS (
+    insert into
+      pf.indices_last (
+        evts,
+        icode,
+        lstpr,
+        nch,
+        tick_cnt,
+        extts,
+        insts,
+        sid_run,
+        cid_run
+      )
+    select
+      i.evts,
+      i.icode,
+      i.lstpr,
+      i.nch,
+      i.tick_cnt,
+      i.extts,
+      i.insts,
+      i.sid_run,
+      i.cid_run
+    from
+      indices i
+    on conflict (icode) do update
+    set
+      evts = excluded.evts,
+      lstpr = excluded.lstpr,
+      nch = excluded.nch,
+      tick_cnt = excluded.tick_cnt,
+      extts = excluded.extts,
+      insts = excluded.insts,
+      sid_run = excluded.sid_run,
+      cid_run = excluded.cid_run
+  ),
+  bonds AS (
+    insert into
+      pf.bonds (
+        evts,
+        icode,
+        ask_y,
+        bid_y,
+        nch,
+        tick_cnt,
+        extts,
+        insts,
+        sid_run,
+        cid_run
+      )
+    select
+      src.evts,
+      src.icode,
+      src.a as ask_y,
+      src.b as bid_y,
+      src.nch,
+      src.tick_cnt,
+      src.extts,
+      src.insts,
+      src.sid_run,
+      load_batch.p_cid_run as cid_run
+    from
+      src
+    where
+      src.discriminator = 'bonds'
+    returning
+      *
+  ),
+  bonds_last AS (
+    insert into
+      pf.bonds_last (
+        evts,
+        icode,
+        ask_y,
+        bid_y,
+        nch,
+        tick_cnt,
+        extts,
+        insts,
+        sid_run,
+        cid_run
+      )
+    select
+      b.evts,
+      b.icode,
+      b.ask_y,
+      b.bid_y,
+      b.nch,
+      b.tick_cnt,
+      b.extts,
+      b.insts,
+      b.sid_run,
+      b.cid_run
+    from
+      bonds b
+    on conflict (icode) do update
+    set
+      evts = excluded.evts,
+      ask_y = excluded.ask_y,
+      bid_y = excluded.bid_y,
+      nch = excluded.nch,
+      tick_cnt = excluded.tick_cnt,
+      extts = excluded.extts,
+      insts = excluded.insts,
+      sid_run = excluded.sid_run,
+      cid_run = excluded.cid_run
+  ),
+  quotes AS (
+    insert into
+      pf.quotes (
+        evts,
+        icode,
+        ask,
+        bid,
+        nch,
+        tick_cnt,
+        extts,
+        insts,
+        sid_run,
+        cid_run
+      )
+    select
+      src.evts,
+      src.icode,
+      src.a as ask,
+      src.b as bid,
+      src.nch,
+      src.tick_cnt,
+      src.extts,
+      src.insts,
+      src.sid_run,
+      load_batch.p_cid_run as cid_run
+    from
+      src
+    where
+      src.discriminator = 'quotes'
+      and src.a is not null
+    returning
+      *
+  ),
+  quotes_last AS (
+    insert into
+      pf.quotes_last (
+        evts,
+        icode,
+        ask,
+        bid,
+        nch,
+        tick_cnt,
+        extts,
+        insts,
+        sid_run,
+        cid_run
+      )
+    select
+      q.evts,
+      q.icode,
+      q.ask,
+      q.bid,
+      q.nch,
+      q.tick_cnt,
+      q.extts,
+      q.insts,
+      q.sid_run,
+      q.cid_run
+    from
+      quotes q
+    on conflict (icode) do update
+    set
+      evts = excluded.evts,
+      ask = excluded.ask,
+      bid = excluded.bid,
+      nch = excluded.nch,
+      tick_cnt = excluded.tick_cnt,
+      extts = excluded.extts,
+      insts = excluded.insts,
+      sid_run = excluded.sid_run,
+      cid_run = excluded.cid_run
+  )
+insert into
+  webdwh_aux.system_heartbeat as t (subsystem, last_activity)
+values
+  ('pf', now())
+on conflict (subsystem) do update
+set
+  last_activity = excluded.last_activity
+where
+  t.last_activity <= excluded.last_activity - '00:00:05'::interval;
+
+end;
